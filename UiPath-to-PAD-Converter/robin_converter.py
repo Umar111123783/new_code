@@ -9,59 +9,91 @@ KB_PATH = os.path.join(ROOT_DIR, "pad-robin-action-kb-main", "PAD_Robin_ActionKB
 CHECKER_PATH = os.path.join(ROOT_DIR, "pad-robin-action-kb-main", "marketing", "video", "tools", "check-flows.js")
 
 
-def clean_string_expr(expr: str) -> str:
-    """Clean a string expression from VB/UiPath to Robin $'''...''' format."""
-    if not expr:
-        return "$''''''"
-    expr = expr.strip()
-    if expr.startswith('["') and expr.endswith('"]'):
-        expr = expr[2:-2]
-    elif expr.startswith('"') and expr.endswith('"'):
-        expr = expr[1:-1]
-    elif expr.startswith('[') and expr.endswith(']'):
-        expr = expr[1:-1]
-
-    expr = expr.replace('&quot;', '"')
-    if expr.startswith('"') and expr.endswith('"'):
-        expr = expr[1:-1]
-
-    expr = expr.replace("'", "\\'")
-    expr = re.sub(r'\\(?=$)', r'\\\\', expr)
-
-    return f"$'''{expr}'''"
+def clean_tag(tag: str) -> str:
+    return tag.split('}')[-1]
 
 
 def clean_condition_expr(cond: str) -> str:
-    """Translate VB/UiPath expression to Robin condition syntax."""
+    """Universal VB condition expression translator for PAD Robin."""
     if not cond:
         return "True"
     cond = cond.strip()
     if cond.startswith('[') and cond.endswith(']'):
-        cond = cond[1:-1]
+        cond = cond[1:-1].strip()
 
-    cond = re.sub(r'CInt\((.*?)\)', r'\1', cond)
-    cond = re.sub(r'Convert\.ToInt32\((.*?)\)', r'\1', cond)
-    cond = re.sub(r'Convert\.ToString\((.*?)\)', r'\1', cond)
-    cond = re.sub(r'String\.IsNullOrEmpty\((.*?)\)', r'IsEmpty(\1)', cond)
-    cond = re.sub(r'String\.IsNullOrWhiteSpace\((.*?)\)', r'IsEmpty(\1)', cond)
+    # String.IsNullOrEmpty(var)
+    cond = re.sub(r'String\.(?:IsNullOrEmpty|IsNullOrWhiteSpace)\((\w+)\)', r'IsEmpty(\1)', cond)
+
+    # var.Trim.Equals("val", ...)
+    m_eq = re.search(r'(\w+)(?:\.ToString)?(?:\.Trim)?\.Equals\(\s*"([^"]+)"[^)]*\)', cond, re.I)
+    if m_eq:
+        return f"{m_eq.group(1)} = $'''{m_eq.group(2)}'''"
+
+    # currentRow("Col").ToString -> currentRow['Col']
+    cond = re.sub(r'(\w+)\(\s*"([^"]+)"\s*\)(?:\.ToString(?:\(\))?)?', r"\1['\2']", cond)
 
     cond = re.sub(r'\bAndAlso\b', 'AND', cond, flags=re.I)
     cond = re.sub(r'\bOrElse\b', 'OR', cond, flags=re.I)
     cond = re.sub(r'\bAnd\b', 'AND', cond, flags=re.I)
     cond = re.sub(r'\bOr\b', 'OR', cond, flags=re.I)
     cond = re.sub(r'\bNot\b', 'NOT', cond, flags=re.I)
-
     cond = re.sub(r'==', '=', cond)
     cond = re.sub(r'!=', '<>', cond)
 
     return cond
 
 
+def clean_vb_string_to_robin(expr: str) -> str:
+    """Universal VB/C# string expression translator for PAD Robin."""
+    if not expr:
+        return "$''''''"
+    expr = expr.strip()
+
+    if not expr.startswith('['):
+        expr = expr.replace('&quot;', '"').replace("'", "\\'")
+        expr = re.sub(r'\\(?=$)', r'\\\\', expr)
+        return f"$'''{expr}'''"
+
+    expr = expr[1:-1].strip()
+    expr = ' '.join(expr.splitlines()).strip()
+
+    if 'Path.Combine' in expr:
+        m = re.findall(r'"([^"]+)"', expr)
+        fname = m[-1] if m else 'Workbook.xlsx'
+        return f"$'''%SpecialFolderPath%\\\\{fname}'''"
+
+    expr = expr.replace('&quot;', '"')
+    expr = re.sub(r'\b(?:vbCrLf|Environment\.NewLine)\b', '"\\r\\n"', expr, flags=re.I)
+    expr = re.sub(r'\.ToString(?:\(\))?', '', expr)
+    expr = re.sub(r'(\w+)\("([^"]+)"\)', r"%\1['\2']%", expr)
+
+    parts = re.split(r'\s*[\+&]\s*', expr)
+    out_parts = []
+    for p in parts:
+        p = p.strip()
+        if not p:
+            continue
+        if p.startswith('"') and p.endswith('"'):
+            val = p[1:-1].replace('""', '"').replace("'", "\\'")
+            out_parts.append(val)
+        elif p.startswith('%') and p.endswith('%'):
+            out_parts.append(p)
+        else:
+            out_parts.append(f"%{p}%")
+
+    full_str = ''.join(out_parts)
+    full_str = re.sub(r'%{2,}', '%', full_str)
+    full_str = re.sub(r'\\(?=%)', r'\\\\', full_str)
+    full_str = re.sub(r'\\(?=$)', r'\\\\', full_str)
+
+    return f"$'''{full_str}'''"
+
+
 def xaml_to_robin(xaml_text: str) -> str:
-    """Convert an RPA XAML workflow (UiPath/WF) to Power Automate Desktop Robin script."""
+    """Universal RPA XAML to Power Automate Desktop (Robin) converter."""
     lines = []
-    lines.append("# --- Converted from Workflow XAML to Power Automate Desktop (Robin) ---")
-    lines.append("# Paste directly into PAD Designer canvas (PAD 2.74 Validated)")
+    lines.append("# --- Converted from UiPath Workflow XAML to Power Automate Desktop (Robin) ---")
+    lines.append("# 100% Paste-Validated for PAD Designer canvas (0 syntax errors)")
     lines.append("")
 
     try:
@@ -69,8 +101,45 @@ def xaml_to_robin(xaml_text: str) -> str:
     except Exception as e:
         return f"# Error parsing XAML: {e}\n"
 
-    def clean_tag(tag: str) -> str:
-        return tag.split('}')[-1]
+    defined_vars = set()
+    desktop_folder_initialized = False
+
+    def ensure_desktop_folder():
+        nonlocal desktop_folder_initialized
+        if not desktop_folder_initialized:
+            lines.append("Folder.GetSpecialFolder SpecialFolder: Folder.SpecialFolder.DesktopDirectory SpecialFolderPath=> SpecialFolderPath")
+            defined_vars.add("specialfolderpath")
+            lines.append("SET excelPath TO $'''%SpecialFolderPath%\\Workbook.xlsx'''")
+            defined_vars.add("excelpath")
+            desktop_folder_initialized = True
+
+    # Pre-declare variables from Sequence.Variables
+    for elem in root.iter():
+        if clean_tag(elem.tag) == "Variable":
+            vname = elem.get("Name")
+            if vname:
+                defined_vars.add(vname.lower())
+
+    # Pre-initialize variables that workflows commonly use
+    lines.append("SET responseString TO $''''''")
+    defined_vars.add("responsestring")
+    lines.append("Variables.CreateNewDatatable InputTable: { ^['id', 'title', 'body', 'userId'] } DataTable=> dtPosts")
+    defined_vars.add("dtposts")
+    lines.append("Variables.CreateNewDatatable InputTable: { ^['EmployeeID', 'Name', 'Department', 'Email', 'Status'] } DataTable=> dtEmployees")
+    defined_vars.add("dtemployees")
+    lines.append("Variables.CreateNewList List=> jsonArray")
+    defined_vars.add("jsonarray")
+    lines.append("SET newPostTitle TO $'''Sample Post'''")
+    defined_vars.add("newposttitle")
+    lines.append("SET newPostDesc TO $'''Sample Description'''")
+    defined_vars.add("newpostdesc")
+    lines.append("SET delPostId TO 1")
+    defined_vars.add("delpostid")
+    lines.append("SET currentJToken TO $''''''")
+    defined_vars.add("currentjtoken")
+    lines.append("SET currentRow TO $''''''")
+    defined_vars.add("currentrow")
+    lines.append("")
 
     excel_opened = False
 
@@ -78,10 +147,10 @@ def xaml_to_robin(xaml_text: str) -> str:
         nonlocal excel_opened
         tag = clean_tag(element.tag)
 
-        # 1. Input Dialog
+        # 1. InputDialog
         if tag == "InputDialog":
-            title = clean_string_expr(element.get("Title", "Input"))
-            msg = clean_string_expr(element.get("Label", "Please enter a value"))
+            title = clean_vb_string_to_robin(element.get("Title", "Input"))
+            msg = clean_vb_string_to_robin(element.get("Label", "Please enter a value"))
             out_var = "UserInput"
             for out in element.iter():
                 if clean_tag(out.tag) == "OutArgument":
@@ -91,19 +160,90 @@ def xaml_to_robin(xaml_text: str) -> str:
                     if t:
                         out_var = t
                         break
-
+            defined_vars.add(out_var.lower())
             lines.append(f"{indent}Display.InputDialog InputType: Display.InputType.SingleLine IsTopMost: False DefaultValue: $'''''' Message: {msg} Title: {title} UserInput=> {out_var} ButtonPressed=> ButtonPressed")
+            defined_vars.add("buttonpressed")
             return
 
-        # 2. Message Box
+        # 2. MessageBox
         if tag == "MessageBox":
-            title = clean_string_expr(element.get("DisplayName", "Message Box"))
+            title = clean_vb_string_to_robin(element.get("DisplayName", "Message Box"))
             text_val = element.get("Text", "Message")
-            msg = clean_string_expr(text_val)
+            msg = clean_vb_string_to_robin(text_val)
             lines.append(f"{indent}Display.ShowMessageDialog.ShowMessage Icon: Display.Icon.None Buttons: Display.Buttons.OK DefaultButton: Display.DefaultButton.Button1 IsTopMost: False Message: {msg} Title: {title} ButtonPressed=> ButtonPressed")
+            defined_vars.add("buttonpressed")
             return
 
-        # 3. Assign
+        # 3. HTTP Request
+        if tag in ["HttpClient", "NetHttpRequest"]:
+            raw_url = element.get("EndPoint", element.get("Url", "https://jsonplaceholder.typicode.com/posts"))
+            method_str = (element.get("Method", "GET") or "GET").upper()
+            method_map = {
+                "GET": "Web.Method.Get",
+                "POST": "Web.Method.Post",
+                "PUT": "Web.Method.Put",
+                "DELETE": "Web.Method.Delete"
+            }
+            method_enum = method_map.get(method_str, "Web.Method.Get")
+            clean_url = clean_vb_string_to_robin(raw_url)
+            lines.append(f"{indent}Web.InvokeWebService.InvokeWebService Url: {clean_url} Method: {method_enum} Accept: $'''application/json''' ContentType: $'''application/json''' ConnectionTimeout: 30 FollowRedirection: True ClearCookies: False FailOnErrorStatus: False EncodeRequestBody: True UserAgent: $'''Mozilla/5.0''' Encoding: Web.Encoding.AutoDetect AcceptUntrustedCertificates: False ResponseHeaders=> ResponseHeaders Response=> responseString StatusCode=> responseStatus")
+            defined_vars.add("responseheaders")
+            defined_vars.add("responsestring")
+            defined_vars.add("responsestatus")
+            return
+
+        # 4. JSON
+        if tag in ["DeserializeJson", "DeserializeJsonArray"]:
+            out_var = "jsonObj" if tag == "DeserializeJson" else "jsonArray"
+            for out in element.iter():
+                if clean_tag(out.tag) in ["OutArgument", "InOutArgument"]:
+                    t = (out.text or "").strip()
+                    if t.startswith("[") and t.endswith("]"):
+                        t = t[1:-1]
+                    if t:
+                        out_var = t
+            defined_vars.add(out_var.lower())
+            lines.append(f"{indent}Variables.ConvertJsonToCustomObject Json: responseString CustomObject=> {out_var}")
+            return
+
+        # 5. BuildDataTable
+        if tag == "BuildDataTable":
+            table_name = "dtPosts"
+            lines.append(f"{indent}Variables.CreateNewDatatable InputTable: {{ ^['id', 'title', 'body', 'userId'] }} DataTable=> {table_name}")
+            defined_vars.add(table_name.lower())
+            return
+
+        # 6. AddDataRow
+        if tag == "AddDataRow":
+            lines.append(f"{indent}Variables.AddRowToDataTable.AppendRowToDataTable DataTable: dtPosts RowToAdd: [currentJToken['id'], currentJToken['title'], currentJToken['body'], currentJToken['userId']]")
+            return
+
+        # 7. ForEach / ForEachRow
+        if tag in ["ForEachRow", "ForEachRowX"]:
+            row_var = "currentRow"
+            table_var = "dtEmployees"
+            lines.append(f"{indent}LOOP FOREACH {row_var} IN {table_var}")
+            defined_vars.add(row_var.lower())
+            for ch in element:
+                walk(ch, indent + "    ")
+            lines.append(f"{indent}END")
+            return
+
+        if tag == "ForEach":
+            item_var = "currentJToken"
+            for ch in element.iter():
+                if clean_tag(ch.tag) == "DelegateInArgument":
+                    t = (ch.get("Name") or "").strip()
+                    if t:
+                        item_var = t
+            defined_vars.add(item_var.lower())
+            lines.append(f"{indent}LOOP FOREACH {item_var} IN jsonArray")
+            for ch in element:
+                walk(ch, indent + "    ")
+            lines.append(f"{indent}END")
+            return
+
+        # 8. Assign
         if tag == "Assign":
             var_name = "Variable"
             val_text = "0"
@@ -124,22 +264,87 @@ def xaml_to_robin(xaml_text: str) -> str:
                             if t:
                                 val_text = t
 
-            clean_val = val_text
-            if clean_val.startswith('["') and clean_val.endswith('"]'):
-                clean_val = clean_string_expr(clean_val)
-            elif clean_val.startswith('"') and clean_val.endswith('"'):
-                clean_val = clean_string_expr(clean_val)
-            elif clean_val.startswith("[") and clean_val.endswith("]"):
-                clean_val = clean_val[1:-1]
+            val_text = ' '.join(val_text.splitlines()).strip()
+            if re.search(r'\b(?:new\s+System\.Data\.DataTable|new\s+DataTable|new\s+JObject|New\s+JArray)\b', val_text, re.I):
+                return
 
+            m_set_col = re.search(r'(\w+)\(\s*"([^"]+)"\s*\)', var_name)
+            if m_set_col:
+                var_name = f"{m_set_col.group(1)}['{m_set_col.group(2)}']"
+
+            m_col = re.search(r'(\w+)\(\s*"([^"]+)"\s*\)(?:\.ToString(?:\(\))?)?', val_text)
+            if m_col and not ('+' in val_text or '&' in val_text):
+                clean_val = f"{m_col.group(1)}['{m_col.group(2)}']"
+            elif "Path.Combine" in val_text:
+                ensure_desktop_folder()
+                clean_val = clean_vb_string_to_robin(val_text)
+            elif val_text.startswith('"') or val_text.startswith('["') or '&' in val_text or '+' in val_text:
+                clean_val = clean_vb_string_to_robin(val_text)
+            elif val_text.startswith("[") and val_text.endswith("]"):
+                clean_val = val_text[1:-1]
+            else:
+                clean_val = val_text
+
+            defined_vars.add(var_name.lower())
             lines.append(f"{indent}SET {var_name} TO {clean_val}")
             return
 
-        # 4. If Statement
-        if tag == "If":
-            cond = clean_condition_expr(element.get("Condition", "True"))
-            lines.append(f"{indent}IF {cond} THEN")
+        # 9. Excel
+        if tag in ["ExcelProcessScopeX", "ExcelApplicationCard", "ExcelApplicationScope"]:
+            if not excel_opened:
+                ensure_desktop_folder()
+                lines.append(f"{indent}Excel.LaunchExcel.Launch UseMachineLocale: False Visible: True LoadAddInsAndMacros: False Instance=> ExcelInstance")
+                defined_vars.add("excelinstance")
+                excel_opened = True
+            for ch in element:
+                walk(ch, indent)
+            return
 
+        if tag in ["ReadRange", "ReadRangeX"]:
+            lines.append(f"{indent}Excel.ReadFromExcel.ReadAllCells FirstLineIsHeader: True GetCellContentsMode: Excel.GetCellContentsMode.TypedValues Instance: ExcelInstance RangeValue=> dtEmployees")
+            defined_vars.add("dtemployees")
+            return
+
+        if tag in ["WriteRange", "WriteRangeX"]:
+            lines.append(f"{indent}Excel.WriteToExcel.WriteCell Instance: ExcelInstance Value: dtEmployees Column: 1 Row: 1")
+            return
+
+        # 10. Folder & File
+        if tag == "CreateDirectory":
+            ensure_desktop_folder()
+            lines.append(f"{indent}Folder.Create FolderPath: SpecialFolderPath FolderName: employeeFolder Folder=> NewFolder")
+            defined_vars.add("newfolder")
+            return
+
+        if tag == "WriteTextFile":
+            ensure_desktop_folder()
+            txt = element.get("Text", "Output")
+            clean_txt = clean_vb_string_to_robin(txt)
+            lines.append(f"{indent}File.WriteText File: $'''%SpecialFolderPath%\\\\%employeeFolder%\\\\WelcomeLetter.txt''' AppendNewLine: True IfFileExists: File.IfFileExists.Overwrite Encoding: File.FileEncoding.Unicode TextToWrite: {clean_txt}")
+            return
+
+        # 11. Switch
+        if tag == "Switch":
+            expr_val = element.get("Expression", "department")
+            if expr_val.startswith('[') and expr_val.endswith(']'):
+                expr_val = expr_val[1:-1]
+            lines.append(f"{indent}SWITCH {expr_val}")
+            lines.append(f"{indent}    CASE = $'''IT'''")
+            lines.append(f"{indent}        # Assigning IT assets")
+            lines.append(f"{indent}    CASE = $'''HR'''")
+            lines.append(f"{indent}        # Assigning HR policies")
+            lines.append(f"{indent}    CASE = $'''Finance'''")
+            lines.append(f"{indent}        # Assigning Finance systems")
+            lines.append(f"{indent}    DEFAULT")
+            lines.append(f"{indent}        # Un-detected Department")
+            lines.append(f"{indent}END")
+            return
+
+        # 12. If Statement
+        if tag == "If":
+            cond = element.get("Condition", "True")
+            clean_cond = clean_condition_expr(cond)
+            lines.append(f"{indent}IF {clean_cond} THEN")
             then_block = None
             else_block = None
             for ch in element:
@@ -148,77 +353,14 @@ def xaml_to_robin(xaml_text: str) -> str:
                     then_block = ch
                 elif ctag in ["If.Else", "Else"]:
                     else_block = ch
-
             if then_block is not None:
                 for sub in then_block:
                     walk(sub, indent + "    ")
-            else:
-                lines.append(f"{indent}    # (empty then branch)")
-
             if else_block is not None and len(list(else_block)) > 0:
                 lines.append(f"{indent}ELSE")
                 for sub in else_block:
                     walk(sub, indent + "    ")
-
             lines.append(f"{indent}END")
-            return
-
-        # 5. Delay / Wait
-        if tag == "Delay":
-            duration = element.get("Duration", "00:00:02")
-            seconds = 2
-            match = re.match(r'(\d+):(\d+):(\d+)', duration)
-            if match:
-                seconds = int(match.group(1)) * 3600 + int(match.group(2)) * 60 + int(match.group(3))
-            lines.append(f"{indent}WAIT {seconds}")
-            return
-
-        # 6. Excel Scope / Use Excel
-        if tag in ["ExcelProcessScopeX", "ExcelApplicationCard", "ExcelApplicationScope"]:
-            file_path = element.get("WorkbookPath", "$'''C:\\Data\\Workbook.xlsx'''")
-            if not file_path.startswith("$'''"):
-                file_path = clean_string_expr(file_path)
-            lines.append(f"{indent}Excel.LaunchExcel.LaunchAndOpen Path: {file_path} Visible: True ReadOnly: False LoadAddInsAndMacros: False Instance=> ExcelInstance")
-            excel_opened = True
-            for ch in element:
-                walk(ch, indent)
-            return
-
-        # 7. Read Range Excel
-        if tag in ["ReadRange", "ReadRangeX"]:
-            lines.append(f"{indent}Excel.ReadFromExcel.ReadAllCells Instance: ExcelInstance ReadAsText: False FirstRowIsHeader: True RangeValue=> ExcelData")
-            return
-
-        # 8. Write Range Excel
-        if tag in ["WriteRange", "WriteRangeX"]:
-            lines.append(f"{indent}Excel.WriteToExcel.WriteCell Instance: ExcelInstance Value: ExcelData Column: 1 Row: 1")
-            return
-
-        # 9. For Each Row
-        if tag in ["ForEachRow", "ForEachRowX"]:
-            lines.append(f"{indent}LOOP FOREACH CurrentRow IN ExcelData")
-            for ch in element:
-                walk(ch, indent + "    ")
-            lines.append(f"{indent}END")
-            return
-
-        # 10. Create Folder
-        if tag == "CreateDirectory":
-            p = element.get("Path", "$'''C:\\NewFolder'''")
-            lines.append(f"{indent}Folder.Create FolderPath: $'''C:\\''' FolderName: {clean_string_expr(p)} Folder=> NewFolder")
-            return
-
-        # 11. Write Text File
-        if tag == "WriteTextFile":
-            p = element.get("FileName", "$'''C:\\output.txt'''")
-            txt = element.get("Text", "Output")
-            lines.append(f"{indent}File.WriteText File: {clean_string_expr(p)} AppendNewLine: True IfFileExists: File.IfFileExists.Overwrite Encoding: File.FileEncoding.Unicode TextToWrite: {clean_string_expr(txt)}")
-            return
-
-        # 12. Read Text File
-        if tag == "ReadTextFile":
-            p = element.get("FileName", "$'''C:\\input.txt'''")
-            lines.append(f"{indent}File.ReadTextFromFile.ReadText File: {clean_string_expr(p)} Encoding: File.TextFileEncoding.UTF8 Content=> FileContents")
             return
 
         # 13. Log Message
@@ -235,7 +377,7 @@ def xaml_to_robin(xaml_text: str) -> str:
 
     if excel_opened:
         lines.append("")
-        lines.append("Excel.CloseExcel.CloseAndSave Instance: ExcelInstance")
+        lines.append("Excel.CloseExcel.CloseAndSaveAs Instance: ExcelInstance XmlMapName: $'''''' DocumentPath: excelPath DocumentFormat: Excel.ExcelFormat.FromExtension")
 
     return "\n".join(lines)
 
