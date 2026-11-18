@@ -1,16 +1,27 @@
 # --- Converted from UiPath Workflow XAML to Power Automate Desktop (Robin) ---
 # 100% Paste-Validated for PAD Designer canvas (0 syntax errors)
 
-SET All_PDFList TO $''''''
-SET All_PDFCount TO 0
-SET IndexCount TO 0
-SET item TO $''''''
+SET FilePath TO $''''''
+SET FileCount TO 0
+SET PageNumber TO 0
+SET PageCounterVar TO 0
+SET FileName TO $''''''
+SET PageRange TO 0
+SET ResultString TO $''''''
+SET file TO $''''''
+SET ButtonPressed TO $''''''
 
 Folder.GetSpecialFolder SpecialFolder: Folder.SpecialFolder.Personal SpecialFolderPath=> DocumentsFolder
-Folder.GetFiles Folder: DocumentsFolder FileFilter: $'''*.pdf''' IncludeSubfolders: False FailOnAccessDenied: True SortBy1: Folder.SortBy.NoSort SortDescending1: False SortBy2: Folder.SortBy.NoSort SortDescending2: False SortBy3: Folder.SortBy.NoSort SortDescending3: False Files=> All_PDFList
-SET All_PDFCount TO All_PDFList.Count
-# Log: $'''Total Number of File in this folder is: %All_PDFCount%'''
-LOOP FOREACH item IN All_PDFList
-    # Log: $'''%Path.GetFileNameWithoutExtension(item)%'''
-    # Log: $'''%All_PDFList(IndexCount)%'''
+Folder.GetFiles Folder: DocumentsFolder FileFilter: $'''*.pdf''' IncludeSubfolders: False FailOnAccessDenied: True SortBy1: Folder.SortBy.NoSort SortDescending1: False SortBy2: Folder.SortBy.NoSort SortDescending2: False SortBy3: Folder.SortBy.NoSort SortDescending3: False Files=> FilePath
+SET FileCount TO FilePath.Count
+LOOP FOREACH file IN FilePath
+    SET FileName TO file.NameWithoutExtension
+    SET PageNumber TO 10
+    LOOP WHILE True
+        Pdf.ExtractTextFromPDF.ExtractText PDFFile: file DetectLayout: False Password: $'''''' ExtractedText=> ResultString
+        Display.ShowMessageDialog.ShowMessage Icon: Display.Icon.None Buttons: Display.Buttons.OK DefaultButton: Display.DefaultButton.Button1 IsTopMost: False Message: $'''File Name: %FileName%
+Page Number: %PageRange%
+%ResultString%''' Title: $'''Message Box''' ButtonPressed=> ButtonPressed
+        SET PageRange TO PageRange + 1
+    END
 END
