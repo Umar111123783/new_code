@@ -1,22 +1,15 @@
 # --- Converted from UiPath Workflow XAML to Power Automate Desktop (Robin) ---
 # 100% Paste-Validated for PAD Designer canvas (0 syntax errors)
 
-SET responseString TO $''''''
-Variables.CreateNewDatatable InputTable: { ^['id', 'title', 'body', 'userId'] } DataTable=> dtPosts
-Variables.CreateNewDatatable InputTable: { ^['EmployeeID', 'Name', 'Department', 'Email', 'Status'] } DataTable=> dtEmployees
-Variables.CreateNewList List=> jsonArray
-SET newPostTitle TO $'''Sample Post'''
-SET newPostDesc TO $'''Sample Description'''
-SET delPostId TO 1
-SET currentJToken TO $''''''
-SET currentRow TO $''''''
-
-SET FilePath TO Directory.GetFiles("Documents", "*.pdf")
-SET FileCount TO FilePath.Count()
-LOOP FOREACH file IN jsonArray
-    SET FileName TO Path.GetFileNameWithoutExtension(file.ToString)
+SET PageRange TO $''''''
+SET ResultString TO $''''''
+Folder.GetSpecialFolder SpecialFolder: Folder.SpecialFolder.Personal SpecialFolderPath=> DocumentsFolder
+Folder.GetFiles Folder: DocumentsFolder FileFilter: $'''*.pdf''' IncludeSubfolders: False FailOnAccessDenied: True SortBy1: Folder.SortBy.NoSort SortDescending1: False SortBy2: Folder.SortBy.NoSort SortDescending2: False SortBy3: Folder.SortBy.NoSort SortDescending3: False Files=> Files
+SET FileCount TO Files.Count
+LOOP FOREACH file IN Files
+    SET FileName TO file.NameWithoutExtension
     Display.ShowMessageDialog.ShowMessage Icon: Display.Icon.None Buttons: Display.Buttons.OK DefaultButton: Display.DefaultButton.Button1 IsTopMost: False Message: $'''File Name: %FileName%
 Page Number: %PageRange%
 %ResultString%''' Title: $'''Message Box''' ButtonPressed=> ButtonPressed
-    SET PageRange TO $'''%PageRange%1%'''
+    SET PageRange TO $'''%PageRange%1'''
 END
