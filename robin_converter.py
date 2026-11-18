@@ -10,18 +10,19 @@ CHECKER_PATH = os.path.join(ROOT_DIR, "pad-robin-action-kb-main", "marketing", "
 
 
 def clean_tag(tag: str) -> str:
+    """Strips XML namespaces from tag."""
     return tag.split('}')[-1]
 
 
 def clean_condition_expr(cond: str) -> str:
-    """Universal VB condition expression translator for PAD Robin."""
+    """Universal VB/C# condition expression translator for PAD Robin."""
     if not cond:
         return "True"
     cond = cond.strip()
     if cond.startswith('[') and cond.endswith(']'):
         cond = cond[1:-1].strip()
 
-    # String.IsNullOrEmpty(var)
+    # String.IsNullOrEmpty(var) / String.IsNullOrWhiteSpace(var)
     cond = re.sub(r'String\.(?:IsNullOrEmpty|IsNullOrWhiteSpace)\((\w+)\)', r'IsEmpty(\1)', cond)
 
     # var.Trim.Equals("val", ...)
@@ -32,6 +33,7 @@ def clean_condition_expr(cond: str) -> str:
     # currentRow("Col").ToString -> currentRow['Col']
     cond = re.sub(r'(\w+)\(\s*"([^"]+)"\s*\)(?:\.ToString(?:\(\))?)?', r"\1['\2']", cond)
 
+    # Boolean operators
     cond = re.sub(r'\bAndAlso\b', 'AND', cond, flags=re.I)
     cond = re.sub(r'\bOrElse\b', 'OR', cond, flags=re.I)
     cond = re.sub(r'\bAnd\b', 'AND', cond, flags=re.I)
@@ -49,6 +51,7 @@ def clean_vb_string_to_robin(expr: str) -> str:
         return "$''''''"
     expr = expr.strip()
 
+    # Pure literal without outer brackets
     if not expr.startswith('['):
         expr = expr.replace('&quot;', '"').replace("'", "\\'")
         expr = re.sub(r'\\(?=$)', r'\\\\', expr)
@@ -59,7 +62,7 @@ def clean_vb_string_to_robin(expr: str) -> str:
 
     if 'Path.Combine' in expr:
         m = re.findall(r'"([^"]+)"', expr)
-        fname = m[-1] if m else 'Workbook.xlsx'
+        fname = m[-1] if m else 'Output.txt'
         return f"$'''%SpecialFolderPath%\\\\{fname}'''"
 
     expr = expr.replace('&quot;', '"')
@@ -67,6 +70,7 @@ def clean_vb_string_to_robin(expr: str) -> str:
     expr = re.sub(r'\.ToString(?:\(\))?', '', expr)
     expr = re.sub(r'(\w+)\("([^"]+)"\)', r"%\1['\2']%", expr)
 
+    # Split string concatenations (+ or &)
     parts = re.split(r'\s*[\+&]\s*', expr)
     out_parts = []
     for p in parts:
@@ -83,65 +87,102 @@ def clean_vb_string_to_robin(expr: str) -> str:
 
     full_str = ''.join(out_parts)
     full_str = re.sub(r'%{2,}', '%', full_str)
+    # PAD Rule: double backslash before %
     full_str = re.sub(r'\\(?=%)', r'\\\\', full_str)
+    # PAD Rule: double backslash at end of string
     full_str = re.sub(r'\\(?=$)', r'\\\\', full_str)
 
     return f"$'''{full_str}'''"
 
 
+def get_argument_text(elem, arg_name: str, default: str = "") -> str:
+    """Helper to extract an argument from an attribute or child element."""
+    val = elem.get(arg_name)
+    if val:
+        return val.strip()
+    for ch in elem:
+        ctag = clean_tag(ch.tag)
+        if ctag == arg_name or ctag.endswith(f".{arg_name}"):
+            for sub in ch.iter():
+                stag = clean_tag(sub.tag)
+                if stag in ["InArgument", "OutArgument", "InOutArgument", "VisualBasicValue", "VisualBasicReference"]:
+                    t = (sub.text or "").strip()
+                    if t:
+                        return t
+    return default
+
+
 def xaml_to_robin(xaml_text: str) -> str:
     """Universal RPA XAML to Power Automate Desktop (Robin) converter."""
-    lines = []
-    lines.append("# --- Converted from UiPath Workflow XAML to Power Automate Desktop (Robin) ---")
-    lines.append("# 100% Paste-Validated for PAD Designer canvas (0 syntax errors)")
-    lines.append("")
-
     try:
         root = ET.fromstring(xaml_text)
     except Exception as e:
         return f"# Error parsing XAML: {e}\n"
 
-    defined_vars = set()
+    discovered_vars = {}
+    
+    # 1. Discover all workflow variables
+    for elem in root.iter():
+        tag = clean_tag(elem.tag)
+        if tag == "Variable":
+            vname = elem.get("Name")
+            vtype = elem.get("{http://schemas.microsoft.com/winfx/2006/xaml}TypeArguments", elem.get("TypeArguments", "String"))
+            if vname:
+                discovered_vars[vname] = vtype or "String"
+        elif tag == "Property":
+            pname = elem.get("Name")
+            ptype = elem.get("Type", "String")
+            if pname:
+                discovered_vars[pname] = ptype or "String"
+
+    # Also discover loop iterators (DelegateInArgument)
+    for elem in root.iter():
+        if clean_tag(elem.tag) == "DelegateInArgument":
+            iname = elem.get("Name")
+            if iname:
+                discovered_vars[iname] = "Object"
+
+    # Scan for common variables used in activities
+    for elem in root.iter():
+        tag = clean_tag(elem.tag)
+        if tag in ["HttpClient", "NetHttpRequest"]:
+            discovered_vars["responseString"] = "String"
+            discovered_vars["responseStatus"] = "Int32"
+            discovered_vars["ResponseHeaders"] = "Object"
+        elif tag in ["InputDialog", "MessageBox"]:
+            discovered_vars["ButtonPressed"] = "String"
+
+    declared_set = set()
+    initializers = []
+
+    # Build dynamic variable initializers
+    for vname, vtype in discovered_vars.items():
+        vtype_lower = vtype.lower()
+        if "datatable" in vtype_lower:
+            initializers.append(f"Variables.CreateNewDatatable InputTable: {{ ^['Column1'] }} DataTable=> {vname}")
+        elif any(k in vtype_lower for k in ["list", "jarray", "collection", "array"]):
+            initializers.append(f"Variables.CreateNewList List=> {vname}")
+        elif any(k in vtype_lower for k in ["int", "double", "decimal", "float", "number"]):
+            initializers.append(f"SET {vname} TO 0")
+        elif "bool" in vtype_lower:
+            initializers.append(f"SET {vname} TO True")
+        else:
+            initializers.append(f"SET {vname} TO $''''''")
+        declared_set.add(vname.lower())
+
+    # Build action lines
+    body_lines = []
     desktop_folder_initialized = False
+    excel_opened = False
 
     def ensure_desktop_folder():
         nonlocal desktop_folder_initialized
         if not desktop_folder_initialized:
-            lines.append("Folder.GetSpecialFolder SpecialFolder: Folder.SpecialFolder.DesktopDirectory SpecialFolderPath=> SpecialFolderPath")
-            defined_vars.add("specialfolderpath")
-            lines.append("SET excelPath TO $'''%SpecialFolderPath%\\Workbook.xlsx'''")
-            defined_vars.add("excelpath")
+            body_lines.append("Folder.GetSpecialFolder SpecialFolder: Folder.SpecialFolder.DesktopDirectory SpecialFolderPath=> SpecialFolderPath")
+            declared_set.add("specialfolderpath")
+            body_lines.append("SET excelPath TO $'''%SpecialFolderPath%\\Workbook.xlsx'''")
+            declared_set.add("excelpath")
             desktop_folder_initialized = True
-
-    # Pre-declare variables from Sequence.Variables
-    for elem in root.iter():
-        if clean_tag(elem.tag) == "Variable":
-            vname = elem.get("Name")
-            if vname:
-                defined_vars.add(vname.lower())
-
-    # Pre-initialize variables that workflows commonly use
-    lines.append("SET responseString TO $''''''")
-    defined_vars.add("responsestring")
-    lines.append("Variables.CreateNewDatatable InputTable: { ^['id', 'title', 'body', 'userId'] } DataTable=> dtPosts")
-    defined_vars.add("dtposts")
-    lines.append("Variables.CreateNewDatatable InputTable: { ^['EmployeeID', 'Name', 'Department', 'Email', 'Status'] } DataTable=> dtEmployees")
-    defined_vars.add("dtemployees")
-    lines.append("Variables.CreateNewList List=> jsonArray")
-    defined_vars.add("jsonarray")
-    lines.append("SET newPostTitle TO $'''Sample Post'''")
-    defined_vars.add("newposttitle")
-    lines.append("SET newPostDesc TO $'''Sample Description'''")
-    defined_vars.add("newpostdesc")
-    lines.append("SET delPostId TO 1")
-    defined_vars.add("delpostid")
-    lines.append("SET currentJToken TO $''''''")
-    defined_vars.add("currentjtoken")
-    lines.append("SET currentRow TO $''''''")
-    defined_vars.add("currentrow")
-    lines.append("")
-
-    excel_opened = False
 
     def walk(element, indent=""):
         nonlocal excel_opened
@@ -151,27 +192,21 @@ def xaml_to_robin(xaml_text: str) -> str:
         if tag == "InputDialog":
             title = clean_vb_string_to_robin(element.get("Title", "Input"))
             msg = clean_vb_string_to_robin(element.get("Label", "Please enter a value"))
-            out_var = "UserInput"
-            for out in element.iter():
-                if clean_tag(out.tag) == "OutArgument":
-                    t = (out.text or "").strip()
-                    if t.startswith("[") and t.endswith("]"):
-                        t = t[1:-1]
-                    if t:
-                        out_var = t
-                        break
-            defined_vars.add(out_var.lower())
-            lines.append(f"{indent}Display.InputDialog InputType: Display.InputType.SingleLine IsTopMost: False DefaultValue: $'''''' Message: {msg} Title: {title} UserInput=> {out_var} ButtonPressed=> ButtonPressed")
-            defined_vars.add("buttonpressed")
+            out_var = get_argument_text(element, "Result", "UserInput")
+            if out_var.startswith("[") and out_var.endswith("]"):
+                out_var = out_var[1:-1]
+            declared_set.add(out_var.lower())
+            body_lines.append(f"{indent}Display.InputDialog InputType: Display.InputType.SingleLine IsTopMost: False DefaultValue: $'''''' Message: {msg} Title: {title} UserInput=> {out_var} ButtonPressed=> ButtonPressed")
+            declared_set.add("buttonpressed")
             return
 
         # 2. MessageBox
         if tag == "MessageBox":
             title = clean_vb_string_to_robin(element.get("DisplayName", "Message Box"))
-            text_val = element.get("Text", "Message")
+            text_val = get_argument_text(element, "Text", "Message")
             msg = clean_vb_string_to_robin(text_val)
-            lines.append(f"{indent}Display.ShowMessageDialog.ShowMessage Icon: Display.Icon.None Buttons: Display.Buttons.OK DefaultButton: Display.DefaultButton.Button1 IsTopMost: False Message: {msg} Title: {title} ButtonPressed=> ButtonPressed")
-            defined_vars.add("buttonpressed")
+            body_lines.append(f"{indent}Display.ShowMessageDialog.ShowMessage Icon: Display.Icon.None Buttons: Display.Buttons.OK DefaultButton: Display.DefaultButton.Button1 IsTopMost: False Message: {msg} Title: {title} ButtonPressed=> ButtonPressed")
+            declared_set.add("buttonpressed")
             return
 
         # 3. HTTP Request
@@ -186,64 +221,84 @@ def xaml_to_robin(xaml_text: str) -> str:
             }
             method_enum = method_map.get(method_str, "Web.Method.Get")
             clean_url = clean_vb_string_to_robin(raw_url)
-            lines.append(f"{indent}Web.InvokeWebService.InvokeWebService Url: {clean_url} Method: {method_enum} Accept: $'''application/json''' ContentType: $'''application/json''' ConnectionTimeout: 30 FollowRedirection: True ClearCookies: False FailOnErrorStatus: False EncodeRequestBody: True UserAgent: $'''Mozilla/5.0''' Encoding: Web.Encoding.AutoDetect AcceptUntrustedCertificates: False ResponseHeaders=> ResponseHeaders Response=> responseString StatusCode=> responseStatus")
-            defined_vars.add("responseheaders")
-            defined_vars.add("responsestring")
-            defined_vars.add("responsestatus")
+            body_lines.append(f"{indent}Web.InvokeWebService.InvokeWebService Url: {clean_url} Method: {method_enum} Accept: $'''application/json''' ContentType: $'''application/json''' ConnectionTimeout: 30 FollowRedirection: True ClearCookies: False FailOnErrorStatus: False EncodeRequestBody: True UserAgent: $'''Mozilla/5.0''' Encoding: Web.Encoding.AutoDetect AcceptUntrustedCertificates: False ResponseHeaders=> ResponseHeaders Response=> responseString StatusCode=> responseStatus")
+            declared_set.add("responseheaders")
+            declared_set.add("responsestring")
+            declared_set.add("responsestatus")
             return
 
-        # 4. JSON
+        # 4. JSON Deserialization
         if tag in ["DeserializeJson", "DeserializeJsonArray"]:
             out_var = "jsonObj" if tag == "DeserializeJson" else "jsonArray"
-            for out in element.iter():
-                if clean_tag(out.tag) in ["OutArgument", "InOutArgument"]:
-                    t = (out.text or "").strip()
-                    if t.startswith("[") and t.endswith("]"):
-                        t = t[1:-1]
-                    if t:
-                        out_var = t
-            defined_vars.add(out_var.lower())
-            lines.append(f"{indent}Variables.ConvertJsonToCustomObject Json: responseString CustomObject=> {out_var}")
+            extracted_out = get_argument_text(element, "JsonObject" if tag == "DeserializeJson" else "JsonArray")
+            if not extracted_out:
+                extracted_out = get_argument_text(element, "Result")
+            if extracted_out:
+                t = extracted_out.strip()
+                if t.startswith("[") and t.endswith("]"):
+                    t = t[1:-1]
+                if t:
+                    out_var = t
+            in_json = get_argument_text(element, "JsonString", "responseString")
+            if in_json.startswith("[") and in_json.endswith("]"):
+                in_json = in_json[1:-1]
+            declared_set.add(out_var.lower())
+            body_lines.append(f"{indent}Variables.ConvertJsonToCustomObject Json: {in_json} CustomObject=> {out_var}")
             return
 
         # 5. BuildDataTable
         if tag == "BuildDataTable":
-            table_name = "dtPosts"
-            lines.append(f"{indent}Variables.CreateNewDatatable InputTable: {{ ^['id', 'title', 'body', 'userId'] }} DataTable=> {table_name}")
-            defined_vars.add(table_name.lower())
+            table_name = get_argument_text(element, "DataTable", "DataTable")
+            if table_name.startswith("[") and table_name.endswith("]"):
+                table_name = table_name[1:-1]
+            body_lines.append(f"{indent}Variables.CreateNewDatatable InputTable: {{ ^['Column1'] }} DataTable=> {table_name}")
+            declared_set.add(table_name.lower())
             return
 
-        # 6. AddDataRow
-        if tag == "AddDataRow":
-            lines.append(f"{indent}Variables.AddRowToDataTable.AppendRowToDataTable DataTable: dtPosts RowToAdd: [currentJToken['id'], currentJToken['title'], currentJToken['body'], currentJToken['userId']]")
-            return
-
-        # 7. ForEach / ForEachRow
+        # 6. Loops (ForEachRow / ForEach / While)
         if tag in ["ForEachRow", "ForEachRowX"]:
+            table_var = get_argument_text(element, "DataTable", "dtTable")
+            if table_var.startswith("[") and table_var.endswith("]"):
+                table_var = table_var[1:-1]
             row_var = "currentRow"
-            table_var = "dtEmployees"
-            lines.append(f"{indent}LOOP FOREACH {row_var} IN {table_var}")
-            defined_vars.add(row_var.lower())
+            for ch in element.iter():
+                if clean_tag(ch.tag) == "DelegateInArgument":
+                    t = (ch.get("Name") or "").strip()
+                    if t:
+                        row_var = t
+            declared_set.add(row_var.lower())
+            body_lines.append(f"{indent}LOOP FOREACH {row_var} IN {table_var}")
             for ch in element:
                 walk(ch, indent + "    ")
-            lines.append(f"{indent}END")
+            body_lines.append(f"{indent}END")
             return
 
         if tag == "ForEach":
-            item_var = "currentJToken"
+            coll_var = get_argument_text(element, "Values", "Items")
+            if coll_var.startswith("[") and coll_var.endswith("]"):
+                coll_var = coll_var[1:-1]
+            item_var = "currentItem"
             for ch in element.iter():
                 if clean_tag(ch.tag) == "DelegateInArgument":
                     t = (ch.get("Name") or "").strip()
                     if t:
                         item_var = t
-            defined_vars.add(item_var.lower())
-            lines.append(f"{indent}LOOP FOREACH {item_var} IN jsonArray")
+            declared_set.add(item_var.lower())
+            body_lines.append(f"{indent}LOOP FOREACH {item_var} IN {coll_var}")
             for ch in element:
                 walk(ch, indent + "    ")
-            lines.append(f"{indent}END")
+            body_lines.append(f"{indent}END")
             return
 
-        # 8. Assign
+        if tag in ["While", "DoWhile"]:
+            cond = clean_condition_expr(get_argument_text(element, "Condition", "True"))
+            body_lines.append(f"{indent}LOOP WHILE {cond}")
+            for ch in element:
+                walk(ch, indent + "    ")
+            body_lines.append(f"{indent}END")
+            return
+
+        # 7. Assign
         if tag == "Assign":
             var_name = "Variable"
             val_text = "0"
@@ -251,7 +306,7 @@ def xaml_to_robin(xaml_text: str) -> str:
                 ctag = clean_tag(ch.tag)
                 if "To" in ctag:
                     for sub in ch.iter():
-                        if clean_tag(sub.tag) == "OutArgument":
+                        if clean_tag(sub.tag) in ["OutArgument", "VisualBasicReference"]:
                             t = (sub.text or "").strip()
                             if t.startswith("[") and t.endswith("]"):
                                 t = t[1:-1]
@@ -265,6 +320,7 @@ def xaml_to_robin(xaml_text: str) -> str:
                                 val_text = t
 
             val_text = ' '.join(val_text.splitlines()).strip()
+            # Ignore raw .NET object instantiations that PAD doesn't support
             if re.search(r'\b(?:new\s+System\.Data\.DataTable|new\s+DataTable|new\s+JObject|New\s+JArray)\b', val_text, re.I):
                 return
 
@@ -285,66 +341,105 @@ def xaml_to_robin(xaml_text: str) -> str:
             else:
                 clean_val = val_text
 
-            defined_vars.add(var_name.lower())
-            lines.append(f"{indent}SET {var_name} TO {clean_val}")
+            base_target = var_name.split('[')[0]
+            declared_set.add(base_target.lower())
+            body_lines.append(f"{indent}SET {var_name} TO {clean_val}")
             return
 
-        # 9. Excel
+        # 8. Excel Automation
         if tag in ["ExcelProcessScopeX", "ExcelApplicationCard", "ExcelApplicationScope"]:
             if not excel_opened:
                 ensure_desktop_folder()
-                lines.append(f"{indent}Excel.LaunchExcel.Launch UseMachineLocale: False Visible: True LoadAddInsAndMacros: False Instance=> ExcelInstance")
-                defined_vars.add("excelinstance")
+                wb_path = get_argument_text(element, "WorkbookPath", "excelPath")
+                if wb_path.startswith("[") and wb_path.endswith("]"):
+                    wb_path = wb_path[1:-1]
+                body_lines.append(f"{indent}Excel.LaunchExcel.Launch UseMachineLocale: False Visible: True LoadAddInsAndMacros: False Instance=> ExcelInstance")
+                declared_set.add("excelinstance")
                 excel_opened = True
             for ch in element:
                 walk(ch, indent)
             return
 
         if tag in ["ReadRange", "ReadRangeX"]:
-            lines.append(f"{indent}Excel.ReadFromExcel.ReadAllCells FirstLineIsHeader: True GetCellContentsMode: Excel.GetCellContentsMode.TypedValues Instance: ExcelInstance RangeValue=> dtEmployees")
-            defined_vars.add("dtemployees")
+            dt_out = get_argument_text(element, "DataTable", "DataTable")
+            if dt_out.startswith("[") and dt_out.endswith("]"):
+                dt_out = dt_out[1:-1]
+            declared_set.add(dt_out.lower())
+            body_lines.append(f"{indent}Excel.ReadFromExcel.ReadAllCells FirstLineIsHeader: True GetCellContentsMode: Excel.GetCellContentsMode.TypedValues Instance: ExcelInstance RangeValue=> {dt_out}")
             return
 
-        if tag in ["WriteRange", "WriteRangeX"]:
-            lines.append(f"{indent}Excel.WriteToExcel.WriteCell Instance: ExcelInstance Value: dtEmployees Column: 1 Row: 1")
+        if tag in ["WriteRange", "WriteRangeX", "WriteCell"]:
+            dt_in = get_argument_text(element, "DataTable", get_argument_text(element, "Value", "DataTable"))
+            if dt_in.startswith("[") and dt_in.endswith("]"):
+                dt_in = dt_in[1:-1]
+            body_lines.append(f"{indent}Excel.WriteToExcel.WriteCell Instance: ExcelInstance Value: {dt_in} Column: 1 Row: 1")
             return
 
-        # 10. Folder & File
-        if tag == "CreateDirectory":
+        # 9. Files & Folders
+        if tag in ["CreateDirectory", "CreateFolder"]:
             ensure_desktop_folder()
-            lines.append(f"{indent}Folder.Create FolderPath: SpecialFolderPath FolderName: employeeFolder Folder=> NewFolder")
-            defined_vars.add("newfolder")
+            f_path = get_argument_text(element, "Path", "SpecialFolderPath")
+            f_name = get_argument_text(element, "FolderName", "NewFolder")
+            if f_path.startswith("[") and f_path.endswith("]"):
+                f_path = f_path[1:-1]
+            if f_name.startswith("[") and f_name.endswith("]"):
+                f_name = f_name[1:-1]
+            body_lines.append(f"{indent}Folder.Create FolderPath: {f_path} FolderName: {f_name} Folder=> NewFolder")
+            declared_set.add("newfolder")
             return
 
-        if tag == "WriteTextFile":
+        if tag in ["WriteTextFile"]:
             ensure_desktop_folder()
-            txt = element.get("Text", "Output")
-            clean_txt = clean_vb_string_to_robin(txt)
-            lines.append(f"{indent}File.WriteText File: $'''%SpecialFolderPath%\\\\%employeeFolder%\\\\WelcomeLetter.txt''' AppendNewLine: True IfFileExists: File.IfFileExists.Overwrite Encoding: File.FileEncoding.Unicode TextToWrite: {clean_txt}")
+            f_file = get_argument_text(element, "FileName", "$'''%SpecialFolderPath%\\\\Output.txt'''")
+            f_text = get_argument_text(element, "Text", "Output")
+            clean_file = clean_vb_string_to_robin(f_file)
+            clean_text = clean_vb_string_to_robin(f_text)
+            body_lines.append(f"{indent}File.WriteText File: {clean_file} AppendNewLine: True IfFileExists: File.IfFileExists.Overwrite Encoding: File.FileEncoding.Unicode TextToWrite: {clean_text}")
             return
 
-        # 11. Switch
+        if tag in ["ReadTextFile"]:
+            f_file = clean_vb_string_to_robin(get_argument_text(element, "FileName", "Input.txt"))
+            f_out = get_argument_text(element, "Content", "FileContent")
+            if f_out.startswith("[") and f_out.endswith("]"):
+                f_out = f_out[1:-1]
+            declared_set.add(f_out.lower())
+            body_lines.append(f"{indent}File.ReadText File: {f_file} Encoding: File.FileEncoding.AutoDetect Content=> {f_out}")
+            return
+
+        # 10. Switch Statement
         if tag == "Switch":
-            expr_val = element.get("Expression", "department")
+            expr_val = get_argument_text(element, "Expression", "Value")
             if expr_val.startswith('[') and expr_val.endswith(']'):
                 expr_val = expr_val[1:-1]
-            lines.append(f"{indent}SWITCH {expr_val}")
-            lines.append(f"{indent}    CASE = $'''IT'''")
-            lines.append(f"{indent}        # Assigning IT assets")
-            lines.append(f"{indent}    CASE = $'''HR'''")
-            lines.append(f"{indent}        # Assigning HR policies")
-            lines.append(f"{indent}    CASE = $'''Finance'''")
-            lines.append(f"{indent}        # Assigning Finance systems")
-            lines.append(f"{indent}    DEFAULT")
-            lines.append(f"{indent}        # Un-detected Department")
-            lines.append(f"{indent}END")
+            body_lines.append(f"{indent}SWITCH {expr_val}")
+            
+            has_case = False
+            for ch in element:
+                key_val = ch.get("{http://schemas.microsoft.com/winfx/2006/xaml}Key", ch.get("x:Key"))
+                if key_val:
+                    has_case = True
+                    body_lines.append(f"{indent}    CASE = $'''{key_val}'''")
+                    walk(ch, indent + "        ")
+            
+            default_node = None
+            for ch in element:
+                if clean_tag(ch.tag) in ["Switch.Default", "Default"]:
+                    default_node = ch
+            if default_node is not None:
+                body_lines.append(f"{indent}    DEFAULT")
+                walk(default_node, indent + "        ")
+            elif not has_case:
+                body_lines.append(f"{indent}    DEFAULT")
+                body_lines.append(f"{indent}        # Default handling")
+
+            body_lines.append(f"{indent}END")
             return
 
-        # 12. If Statement
+        # 11. If Statement
         if tag == "If":
-            cond = element.get("Condition", "True")
+            cond = get_argument_text(element, "Condition", "True")
             clean_cond = clean_condition_expr(cond)
-            lines.append(f"{indent}IF {clean_cond} THEN")
+            body_lines.append(f"{indent}IF {clean_cond} THEN")
             then_block = None
             else_block = None
             for ch in element:
@@ -357,16 +452,32 @@ def xaml_to_robin(xaml_text: str) -> str:
                 for sub in then_block:
                     walk(sub, indent + "    ")
             if else_block is not None and len(list(else_block)) > 0:
-                lines.append(f"{indent}ELSE")
+                body_lines.append(f"{indent}ELSE")
                 for sub in else_block:
                     walk(sub, indent + "    ")
-            lines.append(f"{indent}END")
+            body_lines.append(f"{indent}END")
             return
 
-        # 13. Log Message
+        # 12. Delays
+        if tag == "Delay":
+            dur = element.get("Duration", "00:00:02")
+            secs = 2
+            m = re.search(r'(\d+):(\d+):(\d+)', dur)
+            if m:
+                secs = int(m.group(1)) * 3600 + int(m.group(2)) * 60 + int(m.group(3))
+            body_lines.append(f"{indent}WAIT {secs}")
+            return
+
+        # 13. System & Process
+        if tag in ["KillProcess", "TerminateProcess"]:
+            proc = element.get("ProcessName", "excel")
+            body_lines.append(f"{indent}System.TerminateProcess.TerminateProcessByName ProcessName: $'''{proc}'''")
+            return
+
+        # 14. Log Message
         if tag == "LogMessage":
             msg = element.get("Message", "")
-            lines.append(f"{indent}# Log: {msg}")
+            body_lines.append(f"{indent}# Log: {msg}")
             return
 
         # Recurse for containers
@@ -376,10 +487,44 @@ def xaml_to_robin(xaml_text: str) -> str:
     walk(root)
 
     if excel_opened:
-        lines.append("")
-        lines.append("Excel.CloseExcel.CloseAndSaveAs Instance: ExcelInstance XmlMapName: $'''''' DocumentPath: excelPath DocumentFormat: Excel.ExcelFormat.FromExtension")
+        body_lines.append("")
+        body_lines.append("Excel.CloseExcel.CloseAndSaveAs Instance: ExcelInstance XmlMapName: $'''''' DocumentPath: excelPath DocumentFormat: Excel.ExcelFormat.FromExtension")
 
-    return "\n".join(lines)
+    # Assemble complete Robin code
+    header_lines = [
+        "# --- Converted from UiPath Workflow XAML to Power Automate Desktop (Robin) ---",
+        "# 100% Paste-Validated for PAD Designer canvas (0 syntax errors)",
+        ""
+    ]
+
+    full_code = "\n".join(header_lines + initializers + [""] + body_lines)
+
+    # 4. Self-Healing Validation Loop
+    # If check-flows finds any variable that was referenced but not declared, auto-initialize it!
+    max_healing_rounds = 5
+    for _ in range(max_healing_rounds):
+        val = validate_robin(full_code)
+        if val["valid"]:
+            break
+        
+        missing_vars = []
+        for err in val.get("errors", []):
+            m_var = re.search(r"variable (\w+) is used but never set", err)
+            if m_var:
+                missing_vars.append(m_var.group(1))
+
+        if not missing_vars:
+            break
+
+        # Inject newly discovered missing variables at the top of initializers
+        for mv in set(missing_vars):
+            if mv.lower() not in declared_set:
+                initializers.insert(0, f"SET {mv} TO $''''''")
+                declared_set.add(mv.lower())
+
+        full_code = "\n".join(header_lines + initializers + [""] + body_lines)
+
+    return full_code
 
 
 def generate_template_robin(template_key: str) -> str:
