@@ -1,0 +1,53 @@
+# --- Converted from UiPath Workflow XAML to Power Automate Desktop (Robin) ---
+# 100% Paste-Validated for PAD Designer canvas (0 syntax errors)
+
+SET responseString TO $''''''
+Variables.CreateNewDatatable InputTable: { ^['id', 'title', 'body', 'userId'] } DataTable=> dtPosts
+Variables.CreateNewDatatable InputTable: { ^['EmployeeID', 'Name', 'Department', 'Email', 'Status'] } DataTable=> dtEmployees
+Variables.CreateNewList List=> jsonArray
+SET newPostTitle TO $'''Sample Post'''
+SET newPostDesc TO $'''Sample Description'''
+SET delPostId TO 1
+SET currentJToken TO $''''''
+SET currentRow TO $''''''
+
+SET responseString TO $''''''
+SET postId TO 1
+Web.InvokeWebService.InvokeWebService Url: $'''https://jsonplaceholder.typicode.com/posts''' Method: Web.Method.Get Accept: $'''application/json''' ContentType: $'''application/json''' ConnectionTimeout: 30 FollowRedirection: True ClearCookies: False FailOnErrorStatus: False EncodeRequestBody: True UserAgent: $'''Mozilla/5.0''' Encoding: Web.Encoding.AutoDetect AcceptUntrustedCertificates: False ResponseHeaders=> ResponseHeaders Response=> responseString StatusCode=> responseStatus
+Variables.ConvertJsonToCustomObject Json: responseString CustomObject=> jsonArray
+SET count TO jsonArray.Count
+Display.ShowMessageDialog.ShowMessage Icon: Display.Icon.None Buttons: Display.Buttons.OK DefaultButton: Display.DefaultButton.Button1 IsTopMost: False Message: $'''Total Posts: %count%''' Title: $'''Message Box''' ButtonPressed=> ButtonPressed
+Display.InputDialog InputType: Display.InputType.SingleLine IsTopMost: False DefaultValue: $'''''' Message: $'''Enter the post id''' Title: $'''Get Single Post Details''' UserInput=> postId ButtonPressed=> ButtonPressed
+Web.InvokeWebService.InvokeWebService Url: $'''https://jsonplaceholder.typicode.com/posts/%postId%''' Method: Web.Method.Get Accept: $'''application/json''' ContentType: $'''application/json''' ConnectionTimeout: 30 FollowRedirection: True ClearCookies: False FailOnErrorStatus: False EncodeRequestBody: True UserAgent: $'''Mozilla/5.0''' Encoding: Web.Encoding.AutoDetect AcceptUntrustedCertificates: False ResponseHeaders=> ResponseHeaders Response=> responseString StatusCode=> responseStatus
+Variables.ConvertJsonToCustomObject Json: responseString CustomObject=> jsonObj
+Display.ShowMessageDialog.ShowMessage Icon: Display.Icon.None Buttons: Display.Buttons.OK DefaultButton: Display.DefaultButton.Button1 IsTopMost: False Message: $'''Title :%jsonObj['title']%
+Body :%jsonObj['body']%''' Title: $'''Message Box''' ButtonPressed=> ButtonPressed
+SET requestBody TO $'''{"title":"%newPostTitle%","body":"%newPostDesc%","userId":1}'''
+Web.InvokeWebService.InvokeWebService Url: $'''https://jsonplaceholder.typicode.com/posts''' Method: Web.Method.Post Accept: $'''application/json''' ContentType: $'''application/json''' ConnectionTimeout: 30 FollowRedirection: True ClearCookies: False FailOnErrorStatus: False EncodeRequestBody: True UserAgent: $'''Mozilla/5.0''' Encoding: Web.Encoding.AutoDetect AcceptUntrustedCertificates: False ResponseHeaders=> ResponseHeaders Response=> responseString StatusCode=> responseStatus
+Display.ShowMessageDialog.ShowMessage Icon: Display.Icon.None Buttons: Display.Buttons.OK DefaultButton: Display.DefaultButton.Button1 IsTopMost: False Message: $'''Created new Post response : %responseString%''' Title: $'''Message Box''' ButtonPressed=> ButtonPressed
+SET requestBody TO $'''{"id":1, "title":"Updated Title", "body":"Updated Body", "userId":1}'''
+SET requestBody TO $'''{"title":"%newPostTitle%","body":"%newPostDesc%","id":1,"userId":1}'''
+Web.InvokeWebService.InvokeWebService Url: $'''https://jsonplaceholder.typicode.com/posts/1''' Method: Web.Method.Get Accept: $'''application/json''' ContentType: $'''application/json''' ConnectionTimeout: 30 FollowRedirection: True ClearCookies: False FailOnErrorStatus: False EncodeRequestBody: True UserAgent: $'''Mozilla/5.0''' Encoding: Web.Encoding.AutoDetect AcceptUntrustedCertificates: False ResponseHeaders=> ResponseHeaders Response=> responseString StatusCode=> responseStatus
+Display.ShowMessageDialog.ShowMessage Icon: Display.Icon.None Buttons: Display.Buttons.OK DefaultButton: Display.DefaultButton.Button1 IsTopMost: False Message: $'''Update Post details API response: %responseString%''' Title: $'''Message Box''' ButtonPressed=> ButtonPressed
+Display.InputDialog InputType: Display.InputType.SingleLine IsTopMost: False DefaultValue: $'''''' Message: $'''Enter Post Id to delete''' Title: $'''Delete Post''' UserInput=> delPostId ButtonPressed=> ButtonPressed
+Web.InvokeWebService.InvokeWebService Url: $'''https://jsonplaceholder.typicode.com/posts''' Method: Web.Method.Delete Accept: $'''application/json''' ContentType: $'''application/json''' ConnectionTimeout: 30 FollowRedirection: True ClearCookies: False FailOnErrorStatus: False EncodeRequestBody: True UserAgent: $'''Mozilla/5.0''' Encoding: Web.Encoding.AutoDetect AcceptUntrustedCertificates: False ResponseHeaders=> ResponseHeaders Response=> responseString StatusCode=> responseStatus
+Display.ShowMessageDialog.ShowMessage Icon: Display.Icon.None Buttons: Display.Buttons.OK DefaultButton: Display.DefaultButton.Button1 IsTopMost: False Message: $'''Post wit id: %delPostId%  has been deleted!''' Title: $'''Message Box''' ButtonPressed=> ButtonPressed
+Display.ShowMessageDialog.ShowMessage Icon: Display.Icon.None Buttons: Display.Buttons.OK DefaultButton: Display.DefaultButton.Button1 IsTopMost: False Message: $'''Calling Updated Post list for User 1''' Title: $'''Message Box''' ButtonPressed=> ButtonPressed
+Web.InvokeWebService.InvokeWebService Url: $'''https://jsonplaceholder.typicode.com/posts?userId=1''' Method: Web.Method.Get Accept: $'''application/json''' ContentType: $'''application/json''' ConnectionTimeout: 30 FollowRedirection: True ClearCookies: False FailOnErrorStatus: False EncodeRequestBody: True UserAgent: $'''Mozilla/5.0''' Encoding: Web.Encoding.AutoDetect AcceptUntrustedCertificates: False ResponseHeaders=> ResponseHeaders Response=> responseString StatusCode=> responseStatus
+Variables.ConvertJsonToCustomObject Json: responseString CustomObject=> jsonArray
+LOOP FOREACH currentJToken IN jsonArray
+    Display.ShowMessageDialog.ShowMessage Icon: Display.Icon.None Buttons: Display.Buttons.OK DefaultButton: Display.DefaultButton.Button1 IsTopMost: False Message: $'''Title: %currentJToken['title']%
+Desc :%currentJToken['body']%
+Id: %currentJToken['id']%''' Title: $'''Message Box''' ButtonPressed=> ButtonPressed
+END
+Variables.CreateNewDatatable InputTable: { ^['id', 'title', 'body', 'userId'] } DataTable=> dtPosts
+LOOP FOREACH currentJToken IN jsonArray
+    Variables.AddRowToDataTable.AppendRowToDataTable DataTable: dtPosts RowToAdd: [currentJToken['id'], currentJToken['title'], currentJToken['body'], currentJToken['userId']]
+END
+Folder.GetSpecialFolder SpecialFolder: Folder.SpecialFolder.DesktopDirectory SpecialFolderPath=> SpecialFolderPath
+SET excelPath TO $'''%SpecialFolderPath%\Workbook.xlsx'''
+SET excelPath TO $'''%SpecialFolderPath%\\User_1_all_posts.xlsx'''
+Excel.LaunchExcel.Launch UseMachineLocale: False Visible: True LoadAddInsAndMacros: False Instance=> ExcelInstance
+Excel.WriteToExcel.WriteCell Instance: ExcelInstance Value: dtEmployees Column: 1 Row: 1
+
+Excel.CloseExcel.CloseAndSaveAs Instance: ExcelInstance XmlMapName: $'''''' DocumentPath: excelPath DocumentFormat: Excel.ExcelFormat.FromExtension
