@@ -11,6 +11,12 @@ SET delPostId TO 1
 SET currentJToken TO $''''''
 SET currentRow TO $''''''
 
-Excel.ReadFromExcel.ReadAllCells FirstLineIsHeader: True GetCellContentsMode: Excel.GetCellContentsMode.TypedValues Instance: ExcelInstance RangeValue=> dtEmployees
-SET dt_Sheet1_Filtered TO Equals[' ']
-Excel.WriteToExcel.WriteCell Instance: ExcelInstance Value: dtEmployees Column: 1 Row: 1
+SET FilePath TO Directory.GetFiles("Documents", "*.pdf")
+SET FileCount TO FilePath.Count()
+LOOP FOREACH file IN jsonArray
+    SET FileName TO Path.GetFileNameWithoutExtension(file.ToString)
+    Display.ShowMessageDialog.ShowMessage Icon: Display.Icon.None Buttons: Display.Buttons.OK DefaultButton: Display.DefaultButton.Button1 IsTopMost: False Message: $'''File Name: %FileName%
+Page Number: %PageRange%
+%ResultString%''' Title: $'''Message Box''' ButtonPressed=> ButtonPressed
+    SET PageRange TO $'''%PageRange%1%'''
+END
