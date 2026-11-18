@@ -1,17 +1,20 @@
 # --- Converted from UiPath Workflow XAML to Power Automate Desktop (Robin) ---
 # 100% Paste-Validated for PAD Designer canvas (0 syntax errors)
 
-SET InputFile TO $''''''
-SET OutputFile TO $''''''
-Variables.CreateNewDatatable InputTable: { ^['Column1'] } DataTable=> dtInput
-SET ExcelWorkbookScope TO $''''''
+SET apiUrl TO $''''''
+SET httpMethod TO $''''''
+SET requestBody TO $''''''
+SET apiResponse TO $''''''
+SET statusCode TO 0
+SET errorMessage TO $''''''
 
-# Log: $'''Starting Excel Automation Bot'''
+# Log: $'''Starting REST API automation'''
+# Log: $'''HTTP status: %statusCode%'''
 Folder.GetSpecialFolder SpecialFolder: Folder.SpecialFolder.DesktopDirectory SpecialFolderPath=> SpecialFolderPath
 SET excelPath TO $'''%SpecialFolderPath%\Workbook.xlsx'''
-Excel.LaunchExcel.Launch UseMachineLocale: False Visible: True LoadAddInsAndMacros: False Instance=> ExcelInstance
-Excel.ReadFromExcel.ReadAllCells FirstLineIsHeader: True GetCellContentsMode: Excel.GetCellContentsMode.TypedValues Instance: ExcelInstance RangeValue=> dtInput
-Excel.WriteToExcel.WriteCell Instance: ExcelInstance Value: dtInput Column: 1 Row: 1
-# Log: $'''Excel processing completed. Output: %OutputFile%'''
-
-Excel.CloseExcel.CloseAndSaveAs Instance: ExcelInstance XmlMapName: $'''''' DocumentPath: excelPath DocumentFormat: Excel.ExcelFormat.FromExtension
+File.WriteText File: $'''%SpecialFolderPath%\\api_response.json''' AppendNewLine: True IfFileExists: File.IfFileExists.Overwrite Encoding: File.FileEncoding.Unicode TextToWrite: $'''%apiResponse%'''
+IF NOT IsEmpty(errorMessage) THEN
+    # Log: $'''%errorMessage%'''
+ELSE
+    # Log: $'''API request completed successfully'''
+END
