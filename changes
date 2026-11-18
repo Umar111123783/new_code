@@ -1,11 +1,16 @@
 # --- Converted from UiPath Workflow XAML to Power Automate Desktop (Robin) ---
 # 100% Paste-Validated for PAD Designer canvas (0 syntax errors)
 
-SET Equals TO $''''''
-SET ExcelInstance TO $''''''
-Variables.CreateNewDatatable InputTable: { ^['Column1'] } DataTable=> dt_Sheet1
-Variables.CreateNewDatatable InputTable: { ^['Column1'] } DataTable=> dt_Sheet1_Filtered
+SET All_PDFList TO $''''''
+SET All_PDFCount TO 0
+SET IndexCount TO 0
+SET item TO $''''''
 
-Excel.ReadFromExcel.ReadAllCells FirstLineIsHeader: True GetCellContentsMode: Excel.GetCellContentsMode.TypedValues Instance: ExcelInstance RangeValue=> dt_Sheet1
-SET dt_Sheet1_Filtered TO Equals[' ']
-Excel.WriteToExcel.WriteCell Instance: ExcelInstance Value: dt_Sheet1_Filtered Column: 1 Row: 1
+Folder.GetSpecialFolder SpecialFolder: Folder.SpecialFolder.Personal SpecialFolderPath=> DocumentsFolder
+Folder.GetFiles Folder: DocumentsFolder FileFilter: $'''*.pdf''' IncludeSubfolders: False FailOnAccessDenied: True SortBy1: Folder.SortBy.NoSort SortDescending1: False SortBy2: Folder.SortBy.NoSort SortDescending2: False SortBy3: Folder.SortBy.NoSort SortDescending3: False Files=> All_PDFList
+SET All_PDFCount TO All_PDFList.Count
+# Log: $'''Total Number of File in this folder is: %All_PDFCount%'''
+LOOP FOREACH item IN All_PDFList
+    # Log: $'''%Path.GetFileNameWithoutExtension(item)%'''
+    # Log: $'''%All_PDFList(IndexCount)%'''
+END
