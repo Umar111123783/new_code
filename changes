@@ -1,20 +1,16 @@
 # --- Converted from UiPath Workflow XAML to Power Automate Desktop (Robin) ---
 # 100% Paste-Validated for PAD Designer canvas (0 syntax errors)
 
-SET apiUrl TO $''''''
-SET httpMethod TO $''''''
-SET requestBody TO $''''''
-SET apiResponse TO $''''''
-SET statusCode TO 0
-SET errorMessage TO $''''''
+Variables.CreateNewList List=> InputRecords
+SET SuccessCount TO 0
+SET FailureCount TO 0
+SET SkippedCount TO 0
 
-# Log: $'''Starting REST API automation'''
-# Log: $'''HTTP status: %statusCode%'''
-Folder.GetSpecialFolder SpecialFolder: Folder.SpecialFolder.DesktopDirectory SpecialFolderPath=> SpecialFolderPath
-SET excelPath TO $'''%SpecialFolderPath%\Workbook.xlsx'''
-File.WriteText File: $'''%SpecialFolderPath%\\api_response.json''' AppendNewLine: True IfFileExists: File.IfFileExists.Overwrite Encoding: File.FileEncoding.Unicode TextToWrite: $'''%apiResponse%'''
-IF NOT IsEmpty(errorMessage) THEN
-    # Log: $'''%errorMessage%'''
-ELSE
-    # Log: $'''API request completed successfully'''
-END
+# Log: $'''CRUD automation started.'''
+# Log: $'''TODO 1: Load Config/settings.json and validate required configuration.'''
+# Log: $'''TODO 2: Read Data/Crud_Input.xlsx into InputRecords.'''
+# Log: $'''TODO 3: For each row, invoke Workflows/ValidateRecord.xaml.'''
+# Log: $'''TODO 4: Invoke Workflows/ProcessRecord.xaml for valid rows.'''
+# Log: $'''TODO 5: Invoke Workflows/AuditResult.xaml after each row.'''
+# Log: $'''TODO 6: Export run summary and failed rows.'''
+# Log: $'''CRUD automation workflow blueprint loaded. Configure the application adapter before production use.'''
