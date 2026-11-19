@@ -1,16 +1,14 @@
 # --- Converted from UiPath Workflow XAML to Power Automate Desktop (Robin) ---
 # 100% Paste-Validated for PAD Designer canvas (0 syntax errors)
 
-Variables.CreateNewList List=> InputRecords
-SET SuccessCount TO 0
-SET FailureCount TO 0
-SET SkippedCount TO 0
 
-# Log: $'''CRUD automation started.'''
-# Log: $'''TODO 1: Load Config/settings.json and validate required configuration.'''
-# Log: $'''TODO 2: Read Data/Crud_Input.xlsx into InputRecords.'''
-# Log: $'''TODO 3: For each row, invoke Workflows/ValidateRecord.xaml.'''
-# Log: $'''TODO 4: Invoke Workflows/ProcessRecord.xaml for valid rows.'''
-# Log: $'''TODO 5: Invoke Workflows/AuditResult.xaml after each row.'''
-# Log: $'''TODO 6: Export run summary and failed rows.'''
-# Log: $'''CRUD automation workflow blueprint loaded. Configure the application adapter before production use.'''
+System.RunApplication.RunApplication ApplicationPath: $'''notepad.exe''' CommandLineArguments: $'''''' WorkingDirectory: $'''''' WindowStyle: System.ProcessWindowStyle.Normal ProcessId=> AppPID
+WAIT 1
+MouseAndKeyboard.SendKeys.FocusAndSendKeys TextToSend: $'''{Control}(n)''' DelayBetweenKeystrokes: 10 SendTextAsHardwareKeys: True
+MouseAndKeyboard.SendKeys.FocusAndSendKeys TextToSend: $'''Hello World''' DelayBetweenKeystrokes: 10 SendTextAsHardwareKeys: False
+MouseAndKeyboard.SendKeys.FocusAndSendKeys TextToSend: $'''{Control}(s)''' DelayBetweenKeystrokes: 10 SendTextAsHardwareKeys: True
+MouseAndKeyboard.SendKeys.FocusAndSendKeys TextToSend: $'''UI-Automation.txt''' DelayBetweenKeystrokes: 10 SendTextAsHardwareKeys: False
+MouseAndKeyboard.SendKeys.FocusAndSendKeys TextToSend: $'''{Return}''' DelayBetweenKeystrokes: 10 SendTextAsHardwareKeys: True
+# Check App State 'Confirm Save As'
+MouseAndKeyboard.SendKeys.FocusAndSendKeys TextToSend: $'''{Left}''' DelayBetweenKeystrokes: 10 SendTextAsHardwareKeys: True
+MouseAndKeyboard.SendKeys.FocusAndSendKeys TextToSend: $'''{Return}''' DelayBetweenKeystrokes: 10 SendTextAsHardwareKeys: True
